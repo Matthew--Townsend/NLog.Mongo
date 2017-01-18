@@ -92,8 +92,11 @@ namespace NLog.Mongo
         /// Gets or sets the Ssl Protocol versions supported by the MongoDb connection.
         /// </summary>
         /// <value>
-        /// Any Combination of Tls12, Tls11, Tls, Ssl3, and Ssl2 separated by commas.
-        /// Example: EnabledSslProtocols="Tls12,Tls11,Tls" will support TLS 1.2, 1.1, and 1.0
+        /// Any Combination of Tls12, Tls11, Tls, Ssl3, and Ssl2 separated by commas.  
+        /// This must match the name in the SslProtocols enumeration:
+        /// https://msdn.microsoft.com/en-us/library/system.security.authentication.sslprotocols(v=vs.110).aspx
+        /// In .NET 4.0 and earlier, Tls12 and Tls11 are not available.
+        /// Example: enabledSslProtocols="Tls12,Tls11,Tls" will support TLS 1.2, 1.1, and 1.0
         /// </value>
         public string EnabledSslProtocols { get; set; }
 
