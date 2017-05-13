@@ -6,9 +6,8 @@ using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.InteropServices;
-using System.Text;
+using System.Security.Authentication;
 using System.Threading;
-using System.Threading.Tasks;
 using MongoDB.Bson;
 using MongoDB.Driver;
 using MongoDB.Driver.Builders;
@@ -24,7 +23,8 @@ namespace NLog.Mongo
     [Target("Mongo")]
     public class MongoTarget : Target
     {
-        private static readonly ConcurrentDictionary<string, MongoCollection> _collectionCache = new ConcurrentDictionary<string, MongoCollection>();
+        private static readonly ConcurrentDictionary<string, MongoCollection> _collectionCache =
+            new ConcurrentDictionary<string, MongoCollection>();
 
         /// <summary>
         /// Initializes a new instance of the <see cref="MongoTarget"/> class.
@@ -90,6 +90,18 @@ namespace NLog.Mongo
         public string CollectionName { get; set; }
 
         /// <summary>
+        /// Gets or sets the Ssl Protocol versions supported by the MongoDb connection.
+        /// </summary>
+        /// <value>
+        /// Any Combination of Tls12, Tls11, Tls, Ssl3, and Ssl2 separated by commas.  
+        /// This must match the name in the SslProtocols enumeration:
+        /// https://msdn.microsoft.com/en-us/library/system.security.authentication.sslprotocols(v=vs.110).aspx
+        /// In .NET 4.0 and earlier, Tls12 and Tls11 are not available.
+        /// Example: enabledSslProtocols="Tls12,Tls11,Tls" will support TLS 1.2, 1.1, and 1.0
+        /// </value>
+        public string EnabledSslProtocols { get; set; }
+
+        /// <summary>
         /// Gets or sets the size in bytes of the capped collection.
         /// </summary>
         /// <value>
@@ -119,7 +131,8 @@ namespace NLog.Mongo
                 ConnectionString = GetConnectionString(ConnectionName);
 
             if (string.IsNullOrEmpty(ConnectionString))
-                throw new NLogConfigurationException("Can not resolve MongoDB ConnectionString. Please make sure the ConnectionString property is set.");
+                throw new NLogConfigurationException(
+                    "Can not resolve MongoDB ConnectionString. Please make sure the ConnectionString property is set.");
 
         }
 
@@ -147,7 +160,8 @@ namespace NLog.Mongo
             }
             catch (Exception ex)
             {
-                if (ex is StackOverflowException || ex is ThreadAbortException || ex is OutOfMemoryException || ex is NLogConfigurationException)
+                if (ex is StackOverflowException || ex is ThreadAbortException || ex is OutOfMemoryException ||
+                    ex is NLogConfigurationException)
                     throw;
 
                 InternalLogger.Error("Error when writing to MongoDB {0}", ex);
@@ -173,7 +187,8 @@ namespace NLog.Mongo
             }
             catch (Exception ex)
             {
-                if (ex is StackOverflowException || ex is ThreadAbortException || ex is OutOfMemoryException || ex is NLogConfigurationException)
+                if (ex is StackOverflowException || ex is ThreadAbortException || ex is OutOfMemoryException ||
+                    ex is NLogConfigurationException)
                     throw;
 
                 InternalLogger.Error("Error when writing to MongoDB {0}", ex);
@@ -287,12 +302,12 @@ namespace NLog.Mongo
                 return null;
 
             value = value.Trim();
-            
-            if (string.IsNullOrEmpty(field.BsonType) 
+
+            if (string.IsNullOrEmpty(field.BsonType)
                 || string.Equals(field.BsonType, "String", StringComparison.OrdinalIgnoreCase))
                 return new BsonString(value);
 
-            
+
             BsonValue bsonValue;
             if (string.Equals(field.BsonType, "Boolean", StringComparison.OrdinalIgnoreCase)
                 && MongoConvert.TryBoolean(value, out bsonValue))
@@ -305,11 +320,11 @@ namespace NLog.Mongo
             if (string.Equals(field.BsonType, "Double", StringComparison.OrdinalIgnoreCase)
                 && MongoConvert.TryDouble(value, out bsonValue))
                 return bsonValue;
-            
+
             if (string.Equals(field.BsonType, "Int32", StringComparison.OrdinalIgnoreCase)
                 && MongoConvert.TryInt32(value, out bsonValue))
                 return bsonValue;
-            
+
             if (string.Equals(field.BsonType, "Int64", StringComparison.OrdinalIgnoreCase)
                 && MongoConvert.TryInt64(value, out bsonValue))
                 return bsonValue;
@@ -317,19 +332,61 @@ namespace NLog.Mongo
             return new BsonString(value);
         }
 
-        private MongoCollection GetCollection()
+        private void SetEnabledSslProtocols(MongoClientSettings mongoClientSettings)
+        {
+            SslProtocols enabledSslProtocols = SslProtocols.None;
+            if (!string.IsNullOrEmpty(EnabledSslProtocols))
+            {
+                string[] sslProtocols = EnabledSslProtocols.Split(',');
+
+                foreach (string sslProtocol in sslProtocols)
+                {
+                    SslProtocols temp;
+                    if (!Enum.TryParse(sslProtocol, false, out temp))
+                    {
+                        throw new NLogConfigurationException(
+                            string.Format("TLS version {0} is not supported by this version of the .NET Framework",
+                                sslProtocol));
+                    }
+                    enabledSslProtocols = enabledSslProtocols | temp;
+                }
+            }
+
+            if (enabledSslProtocols != SslProtocols.None)
+            {
+                mongoClientSettings.SslSettings = new SslSettings
+                {
+                    EnabledSslProtocols = enabledSslProtocols,
+                    CheckCertificateRevocation = false
+                };
+            }
+            else
+            {
+                mongoClientSettings.SslSettings = new SslSettings
+                {
+                    EnabledSslProtocols = mongoClientSettings.SslSettings.EnabledSslProtocols,
+                    CheckCertificateRevocation = false
+                };
+            }
+        }
+
+    private MongoCollection GetCollection()
         {
             // cache mongo collection based on target name.
-            string key = string.Format("k|{0}|{1}|{2}", 
+            string key = string.Format("k|{0}|{1}|{2}|{3}", 
                 ConnectionName ?? string.Empty, 
                 ConnectionString ?? string.Empty, 
-                CollectionName ?? string.Empty);
+                CollectionName ?? string.Empty,
+                EnabledSslProtocols ?? string.Empty);
 
             return _collectionCache.GetOrAdd(key, k =>
             {
                 // create collection
                 var mongoUrl = new MongoUrl(ConnectionString);
-                var client = new MongoClient(mongoUrl);
+                var mongoClientSettings = MongoClientSettings.FromUrl(mongoUrl);
+                SetEnabledSslProtocols(mongoClientSettings);
+                var client = new MongoClient(mongoClientSettings);
+                
                 var server = client.GetServer();
                 var database = server.GetDatabase(mongoUrl.DatabaseName ?? "NLog");
 
